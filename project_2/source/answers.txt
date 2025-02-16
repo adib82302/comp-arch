@@ -3,35 +3,47 @@
     cycle and compute the outputs concurrently in separate cycles?
     Explain in a sentence or two.
 
+    No it is not fully pipelined because it cannot accept a new input at 
+    each cycle becuase the start signal depends on the done signal from the last stage.
+
 
 
 2.  For the 8-stage multiplier, what are the minimum clock period
     and overall time for a multiplication?
 
-Clock period: x.x ns
-Overall time: x.x ns
+Clock period: 1.15 ns
+Overall time: 9.2 ns
 
 3.  For 4-stage?
 
-Clock period: x.x ns
-Overall time: x.x ns
+Clock period: 1.3 ns
+Overall time: 5.2    ns
 
 4.  For 2-stage?
 
-Clock period: x.x ns
-Overall time: x.x ns
+Clock period: 1.8 ns
+Overall time: 3.6 ns
 
 5.  What patterns in the clock period and overall time do you see as we
     decrease the number of stages? Why would you expect this pattern?
+
+    As you decrease the number of stages, the clock period starts to increase, becuase each stage needs to handle more computation per cycle, 
+    so it will have to run at a lower frequency. This increases the critical path delay. 
+
+    However, the pattern at which it changes is not linear. The more stages there are, the shorter the clock period will be, 
+    however due to the pipeline depth, latency can start to be an issue.
 
 
 
 6.  What is the minimum clock period for your ISR module (with the 8-stage mult)?
 
-Clock period: x.x ns
+        Clock period: 2.1 ns
 
 7.  How long (in ns) would it take your module to compute the square root of
     1001 given the cycle time of question 6? Would you expect a performance
-    gain or penalty if you used the 2-stage multiplier?
+    gain or penalty if you used the 2-stage multiplier? 
+
+   67.2 ns since it took 32 cycles to complete
+   with a 2 stage multiplier, i would see a performance increase in the sense that it won't take as many cycles to complete
 
 
