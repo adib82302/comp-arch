@@ -126,7 +126,11 @@ module pipeline (
             next_if_valid <= 1;
         end else begin
             // valid bit will cycle through the pipeline and come back from the wb stage
-            next_if_valid <= mem_wb_reg.valid;
+            if (proc2Dmem_command != BUS_NONE) begin
+            next_if_valid <= 0; // Stall IF when MEM is using memory
+        end else begin
+            next_if_valid <= 1; // Otherwise, allow IF to proceed
+            end
         end
     end
 
