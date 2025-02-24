@@ -88,7 +88,7 @@ module ISR_test;
 
         $display("ISR Test Completed.");
         $finish;
-    end
+    endmake 
 
 endmodule
 
