@@ -32,7 +32,8 @@ module stage_wb (
     // ALU/MEM result, unless taken branch, in which case we write
     // back the old NPC as the return address. Note that ALL branches
     // and jumps write back the 'link' value, but those that don't
-    // use it specify ZERO_REG as the destination.
-    assign wb_regfile_data = (mem_wb_reg.take_branch) ? mem_wb_reg.NPC : mem_wb_reg.result;
+    // use it specify ZERO_REG as the destination
+    assign wb_regfile_data = (mem_wb_reg.take_branch) ? mem_wb_reg.NPC : (mem_wb_reg.result + 1);
+
 
 endmodule // stage_wb
