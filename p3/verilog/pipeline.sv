@@ -57,7 +57,20 @@ module pipeline (
     //////////////////////////////////////////////////
 
     // Pipeline register enables
+ // Pipeline register enables
     logic if_id_enable, id_ex_enable, ex_mem_enable, mem_wb_enable;
+    logic stall_pipeline;
+
+// Stall if the EX stage is a load and the ID stage uses its result
+    assign stall_pipeline = id_ex_reg.rd_mem &&
+                    ((id_ex_reg.dest_reg_idx == if_id_reg.inst.r.rs1) ||
+                     (id_ex_reg.dest_reg_idx == if_id_reg.inst.r.rs2));
+
+// Disable pipeline register enables to create a stall
+    assign if_id_enable = !stall_pipeline;
+    assign id_ex_enable = !stall_pipeline;
+    assign ex_mem_enable = 1'b1; // EX/MEM is always enabled
+    assign mem_wb_enable = 1'b1; // MEM/WB is always enabled    
 
     // Outputs from IF-Stage and IF/ID Pipeline Register
     logic [`XLEN-1:0] proc2Imem_addr;
@@ -82,6 +95,31 @@ module pipeline (
     logic             wb_regfile_en;
     logic [4:0]       wb_regfile_idx;
     logic [`XLEN-1:0] wb_regfile_data;
+
+    // Forwarding Wires
+    logic [`XLEN-1:0] forward_opa, forward_opb;
+
+    // Forwarding logic for ALU operand A
+    always_comb begin
+        if (id_ex_reg.rs1_value == ex_mem_reg.dest_reg_idx && ex_mem_reg.valid && ex_mem_reg.dest_reg_idx != `ZERO_REG) begin
+            forward_opa = ex_mem_reg.alu_result; // Forward from EX stage
+        end else if (id_ex_reg.rs1_value == mem_wb_reg.dest_reg_idx && mem_wb_reg.valid && mem_wb_reg.dest_reg_idx != `ZERO_REG) begin
+            forward_opa = mem_wb_reg.result; // Forward from WB stage
+        end else begin
+            forward_opa = id_ex_reg.rs1_value; // Default: no forwarding
+        end
+    end
+
+    // Forwarding logic for ALU operand B
+    always_comb begin
+        if (id_ex_reg.rs2_value == ex_mem_reg.dest_reg_idx && ex_mem_reg.valid && ex_mem_reg.dest_reg_idx != `ZERO_REG) begin
+            forward_opb = ex_mem_reg.alu_result; // Forward from EX stage
+        end else if (id_ex_reg.rs2_value == mem_wb_reg.dest_reg_idx && mem_wb_reg.valid && mem_wb_reg.dest_reg_idx != `ZERO_REG) begin
+            forward_opb = mem_wb_reg.result; // Forward from WB stage
+        end else begin
+            forward_opb = id_ex_reg.rs2_value; // Default: no forwarding
+        end
+    end
 
     //////////////////////////////////////////////////
     //                                              //
@@ -119,20 +157,26 @@ module pipeline (
 
     logic next_if_valid;
 
-    // synopsys sync_set_reset "reset"
+// Stall if the EX stage is a load and the ID stage uses its result
+    assign stall_pipeline = id_ex_reg.rd_mem &&
+                        ((id_ex_reg.dest_reg_idx == if_id_reg.inst.r.rs1) ||
+                         (id_ex_reg.dest_reg_idx == if_id_reg.inst.r.rs2));
+
+// Disable pipeline register enables to create a stall
+    assign if_id_enable = !stall_pipeline;
+    assign id_ex_enable = !stall_pipeline;
+
+// synopsys sync_set_reset "reset"
     always_ff @(posedge clock) begin
         if (reset) begin
-            // start valid, other stages (ID,EX,MEM,WB) start as invalid
             next_if_valid <= 1;
+        end else if (proc2Dmem_command != BUS_NONE || stall_pipeline) begin
+            next_if_valid <= 0; // Stall IF when MEM is using memory or a data hazard is detected
         end else begin
-            // valid bit will cycle through the pipeline and come back from the wb stage
-            if (proc2Dmem_command != BUS_NONE) begin
-            next_if_valid <= 0; // Stall IF when MEM is using memory
-        end else begin
-            next_if_valid <= 1; // Otherwise, allow IF to proceed
-            end
+            next_if_valid <= 1; // Allow IF to proceed when no hazards are present
         end
     end
+
 
     //////////////////////////////////////////////////
     //                                              //
@@ -165,10 +209,14 @@ module pipeline (
     //                                              //
     //////////////////////////////////////////////////
 
-    assign if_id_enable = 1'b1; // always enabled
-    // synopsys sync_set_reset "reset"
+    // Add a flush signal for when branches are taken
+    logic if_id_flush, id_ex_flush;
+    assign if_id_flush = ex_mem_reg.take_branch && ex_mem_reg.valid;
+    assign id_ex_flush = ex_mem_reg.take_branch && ex_mem_reg.valid;
+
+// IF/ID Pipeline Register with Flush Logic
     always_ff @(posedge clock) begin
-        if (reset) begin
+        if (reset || if_id_flush) begin
             if_id_reg.inst  <= `NOP;
             if_id_reg.valid <= `FALSE;
             if_id_reg.NPC   <= 0;
@@ -210,10 +258,11 @@ module pipeline (
 
     assign id_ex_enable = 1'b1; // always enabled
     // synopsys sync_set_reset "reset"
+    // ID/EX Pipeline Register with Flush Logic
     always_ff @(posedge clock) begin
-        if (reset) begin
+        if (reset || id_ex_flush) begin
             id_ex_reg <= '{
-                `NOP, // we can't simply assign 0 because NOP is non-zero
+                `NOP,
                 {`XLEN{1'b0}}, // PC
                 {`XLEN{1'b0}}, // NPC
                 {`XLEN{1'b0}}, // rs1 select
@@ -247,14 +296,44 @@ module pipeline (
     //                                              //
     //////////////////////////////////////////////////
 
-    stage_ex stage_ex_0 (
-        // Input
-        .id_ex_reg (id_ex_reg),
+    // Forwarding Logic
+    logic [1:0] forward_opa_select, forward_opb_select;
+    logic [`XLEN-1:0] ex_mem_alu_result, mem_wb_result;
 
-        // Output
-        .ex_packet (ex_packet)
-    );
+    // Assign the ALU result from EX/MEM and MEM/WB stages
+    assign ex_mem_alu_result = ex_mem_reg.alu_result;
+    assign mem_wb_result = mem_wb_reg.result;
 
+    // Determine forwarding conditions for ALU inputs
+    always_comb begin
+        // Default to no forwarding
+        forward_opa_select = 2'b00; // 00: from ID/EX
+        forward_opb_select = 2'b00;
+
+        // Forward from EX/MEM if it writes back and matches rs1/rs2
+        if (ex_mem_reg.valid && ex_mem_reg.dest_reg_idx != `ZERO_REG) begin
+            if (ex_mem_reg.dest_reg_idx == id_ex_reg.inst.r.rs1) forward_opa_select = 2'b01;
+            if (ex_mem_reg.dest_reg_idx == id_ex_reg.inst.r.rs2) forward_opb_select = 2'b01;
+        end
+
+        // Forward from MEM/WB if it writes back and matches rs1/rs2
+        if (mem_wb_reg.valid && mem_wb_reg.dest_reg_idx != `ZERO_REG) begin
+            if (mem_wb_reg.dest_reg_idx == id_ex_reg.inst.r.rs1) forward_opa_select = 2'b10;
+            if (mem_wb_reg.dest_reg_idx == id_ex_reg.inst.r.rs2) forward_opb_select = 2'b10;
+        end
+    end
+
+// Instantiate the ALU execution stage
+stage_ex stage_ex_0 (
+    .id_ex_reg (id_ex_reg),
+    .forward_opa_sel (forward_opa_select),
+    .forward_opb_sel (forward_opb_select),
+    .wb_regfile_data (wb_regfile_data),
+    .ex_mem_alu_result (ex_mem_alu_result), // Pass the ALU result from EX/MEM stage
+
+    // Outputs
+    .ex_packet (ex_packet)
+);
     //////////////////////////////////////////////////
     //                                              //
     //           EX/MEM Pipeline Register           //

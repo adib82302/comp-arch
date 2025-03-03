@@ -91,6 +91,10 @@ endmodule // conditional_branch
 
 module stage_ex (
     input ID_EX_PACKET id_ex_reg,
+    input [1:0] forward_opa_sel,  
+    input [1:0] forward_opb_sel,  
+    input [`XLEN-1:0] wb_regfile_data, 
+    input [`XLEN-1:0] ex_mem_alu_result, // New input for EX/MEM forwarding
 
     output EX_MEM_PACKET ex_packet
 );
@@ -117,10 +121,19 @@ module stage_ex (
     // unconditional, or conditional and the condition is true
     assign ex_packet.take_branch = id_ex_reg.uncond_branch || (id_ex_reg.cond_branch && take_conditional);
 
-    // ALU opA mux
+    // ALU opA mux with forwarding
     always_comb begin
         case (id_ex_reg.opa_select)
-            OPA_IS_RS1:  opa_mux_out = id_ex_reg.rs1_value;
+            OPA_IS_RS1: begin
+                // Forwarding for source register 1 (rs1)
+                if (forward_opa_sel == 2'b01) begin
+                    opa_mux_out = ex_mem_reg.alu_result; // Forward from EX/MEM
+                end else if (forward_opa_sel == 2'b10) begin
+                    opa_mux_out = wb_regfile_data; // Forward from MEM/WB
+                end else begin
+                    opa_mux_out = id_ex_reg.rs1_value; // Default to register value
+                end
+            end
             OPA_IS_NPC:  opa_mux_out = id_ex_reg.NPC;
             OPA_IS_PC:   opa_mux_out = id_ex_reg.PC;
             OPA_IS_ZERO: opa_mux_out = 0;
@@ -128,10 +141,19 @@ module stage_ex (
         endcase
     end
 
-    // ALU opB mux
+    // ALU opB mux with forwarding
     always_comb begin
         case (id_ex_reg.opb_select)
-            OPB_IS_RS2:   opb_mux_out = id_ex_reg.rs2_value;
+            OPB_IS_RS2: begin
+                // Forwarding for source register 2 (rs2)
+                if (forward_opb_sel == 2'b01) begin
+                    opb_mux_out = ex_mem_reg.alu_result; // Forward from EX/MEM
+                end else if (forward_opb_sel == 2'b10) begin
+                    opb_mux_out = wb_regfile_data; // Forward from MEM/WB
+                end else begin
+                    opb_mux_out = id_ex_reg.rs2_value; // Default to register value
+                end
+            end
             OPB_IS_I_IMM: opb_mux_out = `RV32_signext_Iimm(id_ex_reg.inst);
             OPB_IS_S_IMM: opb_mux_out = `RV32_signext_Simm(id_ex_reg.inst);
             OPB_IS_B_IMM: opb_mux_out = `RV32_signext_Bimm(id_ex_reg.inst);
